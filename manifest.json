@@ -2,6 +2,7 @@
   "name": "Consumo eléctrico",
   "short_name": "Consumo",
   "description": "Seguimiento de facturas, electrodomésticos y enchufe inteligente",
+  "id": "/",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0F172A",
