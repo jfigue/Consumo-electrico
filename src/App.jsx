@@ -36,6 +36,7 @@ const DISPOSITIVOS_TUYA = [
   { id: "eb50ed465ddfd4c630dr1j", nombre: "Enchufe Entrada (Tuya)" },
   { id: "eb2889d17fa12be750ilub", nombre: "Enchufe Ushi (Tuya)" },
   { id: "ebc75036dbce912bcesvsz", nombre: "Air Fryer (Tuya)" },
+  { id: "ebf5ccf6773ed2982cbgv7", nombre: "Heladera Chica (Tuya)" },
 ];
 
 const CATEGORIAS = {
