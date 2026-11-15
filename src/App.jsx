@@ -312,6 +312,7 @@ export default function App() {
   // Enchufes inteligentes (Tuya) — lista de dispositivos
   const [tuyaEstado, setTuyaEstado] = useState({}); // { [deviceId]: { data, cargando, error } }
   const [historialEnchufe, setHistorialEnchufe] = useState([]);
+  const [inicioMesEnchufe, setInicioMesEnchufe] = useState({}); // { [deviceId]: kWh acumulados en la primera lectura del mes }
 
 
   /* ---------- restaurar sesión guardada ---------- */
@@ -545,12 +546,34 @@ export default function App() {
         console.error("No se pudo cargar el historial del enchufe", err);
       }
     })();
+    // primera lectura del mes en curso, por dispositivo (base para el consumo mensual medido)
+    (async () => {
+      try {
+        const hoy = new Date();
+        const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
+        const filas = await Promise.all(
+          DISPOSITIVOS_TUYA.map((d) =>
+            authedFetch(
+              `lecturas_enchufe?select=energia_acumulada_kwh,leido_en&device_id=eq.${d.id}&leido_en=gte.${inicioMes}&energia_acumulada_kwh=not.is.null&order=leido_en.asc&limit=1`
+            ).then((rows) => (rows && rows[0] ? Number(rows[0].energia_acumulada_kwh) : null))
+          )
+        );
+        const mapa = {};
+        DISPOSITIVOS_TUYA.forEach((d, i) => {
+          mapa[d.id] = filas[i];
+        });
+        setInicioMesEnchufe(mapa);
+      } catch (err) {
+        console.error("No se pudo cargar el inicio de mes del enchufe", err);
+      }
+    })();
     DISPOSITIVOS_TUYA.forEach((d) => leerTuya(d.id));
     const interval = setInterval(() => DISPOSITIVOS_TUYA.forEach((d) => leerTuya(d.id)), 30000); // lectura en vivo cada 30s
     return () => clearInterval(interval);
   }, [session, leerTuya, authedFetch]);
 
-  // consumo real medido este mes calendario, por dispositivo (para incluir en Análisis)
+  // consumo real medido este mes calendario, por dispositivo:
+  // acumulado actual del enchufe − acumulado en la primera lectura del mes
   const consumoTuyaMesPorDispositivo = useMemo(() => {
     const hoy = new Date();
     const resultado = {};
@@ -564,16 +587,25 @@ export default function App() {
           r.energia_acumulada_kwh != null
         );
       });
-      if (delMes.length < 2) {
+      // base: primera lectura del mes consultada a Supabase; si no hay, la más antigua cargada
+      const base =
+        inicioMesEnchufe[d.id] != null
+          ? inicioMesEnchufe[d.id]
+          : delMes.length
+          ? Number(delMes[0].energia_acumulada_kwh)
+          : null;
+      // valor actual: lectura en vivo; si no, la última guardada
+      const vivo = tuyaEstado[d.id]?.data?.energiaAcumuladaKwh;
+      const actual = vivo != null ? vivo : delMes.length ? Number(delMes[delMes.length - 1].energia_acumulada_kwh) : null;
+      if (base == null || actual == null) {
         resultado[d.id] = null;
         continue;
       }
-      const valores = delMes.map((r) => Number(r.energia_acumulada_kwh));
-      const delta = Math.max(...valores) - Math.min(...valores);
-      resultado[d.id] = delta >= 0 ? delta : null;
+      const delta = actual - base;
+      resultado[d.id] = delta >= 0 ? delta : null; // negativo = el contador se reinició
     }
     return resultado;
-  }, [historialEnchufe]);
+  }, [historialEnchufe, inicioMesEnchufe, tuyaEstado]);
 
   /* ---------- derivados ---------- */
   const tarifa = num(config.tarifaKwh) || 0;
@@ -856,6 +888,15 @@ export default function App() {
                   <div>
                     <div style={{ fontSize: 11, color: C.sub }}>Corriente</div>
                     <div style={{ fontSize: 16, fontWeight: 700 }}>{estado.data.corrienteA != null ? `${estado.data.corrienteA.toFixed(2)} A` : "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.sub }}>Consumo del mes</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>
+                      {consumoTuyaMesPorDispositivo[dispositivo.id] != null ? fmtKwh(consumoTuyaMesPorDispositivo[dispositivo.id]) : "—"}
+                    </div>
+                    {consumoTuyaMesPorDispositivo[dispositivo.id] != null && tarifa > 0 && (
+                      <div style={{ fontSize: 11, color: C.sub }}>{fmtARS(consumoTuyaMesPorDispositivo[dispositivo.id] * tarifa)}</div>
+                    )}
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: C.sub }}>Acumulado</div>
