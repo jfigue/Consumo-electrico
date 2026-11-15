@@ -312,7 +312,8 @@ export default function App() {
   // Enchufes inteligentes (Tuya) — lista de dispositivos
   const [tuyaEstado, setTuyaEstado] = useState({}); // { [deviceId]: { data, cargando, error } }
   const [historialEnchufe, setHistorialEnchufe] = useState([]);
-  const [inicioMesEnchufe, setInicioMesEnchufe] = useState({}); // { [deviceId]: kWh acumulados en la primera lectura del mes }
+  const [mesEnchufe, setMesEnchufe] = useState({}); // { [deviceId]: { suma, ultimo } } suma de aumentos del contador en el mes
+  const mesEnchufeRef = useRef({}); // estado incremental: { [deviceId]: { mes, suma, ultimo, desde } }
 
 
   /* ---------- restaurar sesión guardada ---------- */
@@ -529,6 +530,50 @@ export default function App() {
     [authedFetch]
   );
 
+  // Consumo mensual medido: suma de los AUMENTOS del contador acumulado del enchufe dentro del mes.
+  // Las bajadas (reinicios/correcciones del contador) se ignoran. Carga paginada e incremental.
+  const actualizarConsumoMes = useCallback(async () => {
+    const hoy = new Date();
+    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).getTime() - 1;
+    const inicioIso = new Date(inicioMes).toISOString();
+    const resultado = {};
+    await Promise.all(
+      DISPOSITIVOS_TUYA.map(async (d) => {
+        try {
+          let est = mesEnchufeRef.current[d.id];
+          if (!est || est.mes !== inicioIso) est = { mes: inicioIso, suma: 0, ultimo: null, desde: inicioIso };
+          for (;;) {
+            const filas = await authedFetch(
+              `lecturas_enchufe?select=leido_en,energia_acumulada_kwh&device_id=eq.${d.id}&energia_acumulada_kwh=not.is.null&leido_en=gt.${encodeURIComponent(est.desde)}&order=leido_en.asc&limit=1000`
+            );
+            if (!filas || !filas.length) break;
+            for (const r of filas) {
+              const v = Number(r.energia_acumulada_kwh);
+              if (est.ultimo != null && v > est.ultimo) est.suma += v - est.ultimo;
+              est.ultimo = v;
+            }
+            est.desde = filas[filas.length - 1].leido_en;
+            if (filas.length < 1000) break;
+          }
+          mesEnchufeRef.current[d.id] = est;
+          resultado[d.id] = { suma: est.suma, ultimo: est.ultimo };
+        } catch (err) {
+          console.error("No se pudo calcular el consumo del mes del enchufe", d.id, err);
+          const previo = mesEnchufeRef.current[d.id];
+          if (previo) resultado[d.id] = { suma: previo.suma, ultimo: previo.ultimo };
+        }
+      })
+    );
+    setMesEnchufe((prev) => ({ ...prev, ...resultado }));
+  }, [authedFetch]);
+
+  useEffect(() => {
+    if (!session) return;
+    actualizarConsumoMes();
+    const interval = setInterval(actualizarConsumoMes, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [session, actualizarConsumoMes]);
+
   useEffect(() => {
     if (!session) return;
     (async () => {
@@ -546,66 +591,31 @@ export default function App() {
         console.error("No se pudo cargar el historial del enchufe", err);
       }
     })();
-    // primera lectura del mes en curso, por dispositivo (base para el consumo mensual medido)
-    (async () => {
-      try {
-        const hoy = new Date();
-        const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
-        const filas = await Promise.all(
-          DISPOSITIVOS_TUYA.map((d) =>
-            authedFetch(
-              `lecturas_enchufe?select=energia_acumulada_kwh,leido_en&device_id=eq.${d.id}&leido_en=gte.${inicioMes}&energia_acumulada_kwh=not.is.null&order=leido_en.asc&limit=1`
-            ).then((rows) => (rows && rows[0] ? Number(rows[0].energia_acumulada_kwh) : null))
-          )
-        );
-        const mapa = {};
-        DISPOSITIVOS_TUYA.forEach((d, i) => {
-          mapa[d.id] = filas[i];
-        });
-        setInicioMesEnchufe(mapa);
-      } catch (err) {
-        console.error("No se pudo cargar el inicio de mes del enchufe", err);
-      }
-    })();
     DISPOSITIVOS_TUYA.forEach((d) => leerTuya(d.id));
     const interval = setInterval(() => DISPOSITIVOS_TUYA.forEach((d) => leerTuya(d.id)), 30000); // lectura en vivo cada 30s
     return () => clearInterval(interval);
   }, [session, leerTuya, authedFetch]);
 
   // consumo real medido este mes calendario, por dispositivo:
-  // acumulado actual del enchufe − acumulado en la primera lectura del mes
+  // suma de aumentos del contador (cargada de Supabase) + aumento de la lectura en vivo respecto de la última guardada
   const consumoTuyaMesPorDispositivo = useMemo(() => {
-    const hoy = new Date();
     const resultado = {};
     for (const d of DISPOSITIVOS_TUYA) {
-      const delMes = historialEnchufe.filter((r) => {
-        const fecha = new Date(r.leido_en);
-        return (
-          r.device_id === d.id &&
-          fecha.getFullYear() === hoy.getFullYear() &&
-          fecha.getMonth() === hoy.getMonth() &&
-          r.energia_acumulada_kwh != null
-        );
-      });
-      // base: primera lectura del mes consultada a Supabase; si no hay, la más antigua cargada
-      const base =
-        inicioMesEnchufe[d.id] != null
-          ? inicioMesEnchufe[d.id]
-          : delMes.length
-          ? Number(delMes[0].energia_acumulada_kwh)
-          : null;
-      // valor actual: lectura en vivo; si no, la última guardada
-      const vivo = tuyaEstado[d.id]?.data?.energiaAcumuladaKwh;
-      const actual = vivo != null ? vivo : delMes.length ? Number(delMes[delMes.length - 1].energia_acumulada_kwh) : null;
-      if (base == null || actual == null) {
+      const est = mesEnchufe[d.id];
+      if (!est) {
         resultado[d.id] = null;
         continue;
       }
-      const delta = actual - base;
-      resultado[d.id] = delta >= 0 ? delta : null; // negativo = el contador se reinició
+      const vivo = tuyaEstado[d.id]?.data?.energiaAcumuladaKwh;
+      if (est.ultimo == null) {
+        resultado[d.id] = vivo != null ? 0 : null;
+        continue;
+      }
+      const extra = vivo != null && vivo > est.ultimo ? vivo - est.ultimo : 0;
+      resultado[d.id] = est.suma + extra;
     }
     return resultado;
-  }, [historialEnchufe, inicioMesEnchufe, tuyaEstado]);
+  }, [mesEnchufe, tuyaEstado]);
 
   /* ---------- derivados ---------- */
   const tarifa = num(config.tarifaKwh) || 0;
