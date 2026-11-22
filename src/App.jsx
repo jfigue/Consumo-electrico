@@ -211,7 +211,7 @@ function Field({ label, children }) {
   );
 }
 
-function ChartCard({ title, subtitle, height = 280, children, right }) {
+function ChartCard({ title, subtitle, height = 280, children, right, footer }) {
   return (
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14, gap: 12 }}>
@@ -222,6 +222,7 @@ function ChartCard({ title, subtitle, height = 280, children, right }) {
         {right}
       </div>
       <div style={{ width: "100%", height }}>{children}</div>
+      {footer}
     </Card>
   );
 }
@@ -1448,7 +1449,25 @@ export default function App() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Distribución por equipo" subtitle="Participación en el consumo estimado">
+        <ChartCard
+          title="Distribución por equipo"
+          subtitle="Participación en el consumo estimado"
+          footer={
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", marginTop: 14, fontSize: 12, color: C.sub }}>
+              {aparatosCalc.map((a) => {
+                const total = aparatosCalc.reduce((acc, x) => acc + x.kwh, 0);
+                const pct = total ? (a.kwh / total) * 100 : 0;
+                return (
+                  <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, flexShrink: 0, background: CATEGORIAS[a.categoria]?.color || C.gray }} />
+                    <span>{a.nombre}</span>
+                    <span style={{ color: C.text, fontWeight: 600 }}>{pct.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          }
+        >
           <ResponsiveContainer>
             <PieChart>
               <Pie
@@ -1457,7 +1476,7 @@ export default function App() {
                 nameKey="nombre"
                 outerRadius={95}
                 stroke="none"
-                label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                label={({ percent }) => (percent >= 0.03 ? `${(percent * 100).toFixed(0)}%` : "")}
                 labelLine={false}
               >
                 {aparatosCalc.map((a) => (
@@ -1465,7 +1484,6 @@ export default function App() {
                 ))}
               </Pie>
               <Tooltip {...tipProps} formatter={(v, n) => [fmtKwh(v), n]} />
-              <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ fontSize: 11, color: C.sub, maxWidth: 130 }} />
             </PieChart>
           </ResponsiveContainer>
         </ChartCard>
