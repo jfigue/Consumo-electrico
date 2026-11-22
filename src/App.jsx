@@ -211,6 +211,16 @@ function Field({ label, children }) {
   );
 }
 
+// variante de un color hex: amount<0 oscurece, amount>0 aclara (para distinguir equipos de una misma categoría)
+function variante(hex, i, n) {
+  const t = n > 1 ? i / (n - 1) : 0.5;
+  const amount = -0.28 + t * 0.62;
+  const h = hex.replace("#", "");
+  const ch = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16));
+  const mix = ch.map((c) => Math.round(amount >= 0 ? c + (255 - c) * amount : c * (1 + amount)));
+  return `rgb(${mix[0]}, ${mix[1]}, ${mix[2]})`;
+}
+
 function ChartCard({ title, subtitle, height = 280, children, right, footer }) {
   return (
     <Card>
@@ -1432,62 +1442,96 @@ export default function App() {
         </Card>
       </div>
 
-      <div className="grid-2" style={{ marginTop: 18 }}>
-        <ChartCard title="Consumo por categoría" subtitle="kWh mensuales estimados">
-          <ResponsiveContainer>
-            <BarChart data={porCategoria} margin={{ top: 6, right: 10, left: -12, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-              <XAxis dataKey="categoria" {...axisProps} interval={0} angle={-18} textAnchor="end" height={54} />
-              <YAxis {...axisProps} />
-              <Tooltip {...tipProps} formatter={(v, n, p) => [`${fmtKwh(v)} · ${fmtARS(p.payload.costo)}`, p.payload.categoria]} />
-              <Bar dataKey="kwh" radius={[6, 6, 0, 0]}>
-                {porCategoria.map((d) => (
-                  <Cell key={d.categoria} fill={d.color} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
+      {(() => {
+        // equipos agrupados por categoría; cada equipo con una variante del color de su categoría
+        const totalKwh = aparatosCalc.reduce((acc, x) => acc + x.kwh, 0);
+        const grupos = CATS.map((cat) => {
+          const items = aparatosCalc.filter((x) => x.categoria === cat);
+          return { cat, items, kwh: items.reduce((acc, x) => acc + x.kwh, 0), costo: items.reduce((acc, x) => acc + x.costo, 0) };
+        })
+          .filter((g) => g.items.length > 0)
+          .sort((x, y) => y.kwh - x.kwh);
+        const dist = [];
+        grupos.forEach((g) =>
+          g.items.forEach((it, i) => {
+            dist.push({ ...it, color: variante(CATEGORIAS[g.cat].color, i, g.items.length) });
+          })
+        );
+        const colorDe = {};
+        dist.forEach((d) => (colorDe[d.id] = d.color));
+        const pct = (v) => (totalKwh ? (v / totalKwh) * 100 : 0);
 
-        <ChartCard
-          title="Distribución por equipo"
-          subtitle="Participación en el consumo estimado"
-          footer={
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", marginTop: 14, fontSize: 12, color: C.sub }}>
-              {aparatosCalc.map((a) => {
-                const total = aparatosCalc.reduce((acc, x) => acc + x.kwh, 0);
-                const pct = total ? (a.kwh / total) * 100 : 0;
-                return (
-                  <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 3, flexShrink: 0, background: CATEGORIAS[a.categoria]?.color || C.gray }} />
-                    <span>{a.nombre}</span>
-                    <span style={{ color: C.text, fontWeight: 600 }}>{pct.toFixed(0)}%</span>
+        return (
+          <div style={{ marginTop: 18 }}>
+            <Card>
+              <div style={{ marginBottom: 14 }}>
+                <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Distribución por equipo</h3>
+                <p style={{ margin: "3px 0 0", fontSize: 12, color: C.sub }}>
+                  Participación en el consumo estimado · agrupado por categoría · {aparatosCalc.length} equipos
+                </p>
+              </div>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "flex-start" }}>
+                <div style={{ position: "relative", flex: "0 0 300px", width: 300, height: 300, margin: "0 auto" }}>
+                  <ResponsiveContainer>
+                    <PieChart>
+                      <Pie
+                        data={dist}
+                        dataKey="kwh"
+                        nameKey="nombre"
+                        innerRadius={78}
+                        outerRadius={128}
+                        paddingAngle={1}
+                        stroke={C.card}
+                        strokeWidth={2}
+                        labelLine={false}
+                        label={({ percent }) => (percent >= 0.04 ? `${(percent * 100).toFixed(0)}%` : "")}
+                      >
+                        {dist.map((d) => (
+                          <Cell key={d.id} fill={d.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        {...tipProps}
+                        formatter={(v, n, p) => [`${fmtKwh(v)} · ${fmtARS(p.payload.costo)} · ${pct(v).toFixed(1)}%`, n]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                    <div style={{ fontSize: 11, color: C.sub }}>Total estimado</div>
+                    <div style={{ fontSize: 22, fontWeight: 800 }}>{fmtKwh(totalKwh)}</div>
+                    <div style={{ fontSize: 11, color: C.sub }}>{fmtARS(totalKwh * tarifa)}</div>
                   </div>
-                );
-              })}
-            </div>
-          }
-        >
-          <ResponsiveContainer>
-            <PieChart>
-              <Pie
-                data={aparatosCalc}
-                dataKey="kwh"
-                nameKey="nombre"
-                outerRadius={95}
-                stroke="none"
-                label={({ percent }) => (percent >= 0.03 ? `${(percent * 100).toFixed(0)}%` : "")}
-                labelLine={false}
-              >
-                {aparatosCalc.map((a) => (
-                  <Cell key={a.id} fill={CATEGORIAS[a.categoria]?.color || C.gray} />
-                ))}
-              </Pie>
-              <Tooltip {...tipProps} formatter={(v, n) => [fmtKwh(v), n]} />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
+                </div>
+
+                <div style={{ flex: "1 1 360px", minWidth: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "18px 24px" }}>
+                  {grupos.map((g) => (
+                    <div key={g.cat}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 6, marginBottom: 6, borderBottom: `1px solid ${C.border}` }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: CATEGORIAS[g.cat].color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{g.cat}</span>
+                        <span style={{ fontSize: 12, color: C.sub }}>
+                          {fmtKwh(g.kwh)} · <b style={{ color: C.text }}>{pct(g.kwh).toFixed(0)}%</b>
+                        </span>
+                      </div>
+                      {g.items.map((it) => (
+                        <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12 }}>
+                          <span style={{ width: 9, height: 9, borderRadius: 2, background: colorDe[it.id], flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, color: C.sub, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.nombre}>
+                            {it.nombre}
+                          </span>
+                          <span style={{ color: C.sub }}>{fmtKwh(it.kwh)}</span>
+                          <span style={{ width: 38, textAlign: "right", fontWeight: 600 }}>{pct(it.kwh).toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
 
       <div className="grid-2" style={{ marginTop: 18 }}>
         <ChartCard title="Real vs. estimado" subtitle="Factura del mes contra la suma de equipos">
